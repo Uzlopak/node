@@ -19,9 +19,11 @@
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+#include <stdio.h>
 #include "env-inl.h"
 #include "node_external_reference.h"
 #include "string_bytes.h"
+#include "v8-fast-api-calls.h"
 
 #ifdef __MINGW32__
 # include <io.h>
@@ -247,7 +249,7 @@ static void GetInterfaceAddresses(const FunctionCallbackInfo<Value>& args) {
   args.GetReturnValue().Set(Array::New(isolate, result.data(), result.size()));
 }
 
-static void GetOnLineStatus(const FunctionCallbackInfo<Value>& args) {
+static void SlowGetOnLineStatus(const FunctionCallbackInfo<Value>& args) {
   Environment* env = Environment::GetCurrent(args);
   uv_interface_address_t* interfaces;
   int count, i;
@@ -273,6 +275,32 @@ static void GetOnLineStatus(const FunctionCallbackInfo<Value>& args) {
   uv_free_interface_addresses(interfaces, count);
   return args.GetReturnValue().Set(false);
 }
+
+static bool FastGetOnLineStatus(v8::FastApiCallbackOptions& options) {
+  uv_interface_address_t* interfaces;
+  int count, i;
+
+  printf("FastGetOnLineStatus\n");
+  int err = uv_interface_addresses(&interfaces, &count);
+
+  if (err) {
+    options.fallback = true;
+    return false;
+  }
+
+  for (i = 0; i < count; i++) {
+    if (interfaces[i].is_internal == false) {
+      uv_free_interface_addresses(interfaces, count);
+      return true;
+    }
+  }
+
+  uv_free_interface_addresses(interfaces, count);
+  return false;
+}
+
+v8::CFunction fast_get_on_line_status_(
+    v8::CFunction::Make(FastGetOnLineStatus));
 
 static void GetHomeDirectory(const FunctionCallbackInfo<Value>& args) {
   Environment* env = Environment::GetCurrent(args);
@@ -429,7 +457,11 @@ void Initialize(Local<Object> target,
   SetMethod(context, target, "getPriority", GetPriority);
   SetMethod(
       context, target, "getAvailableParallelism", GetAvailableParallelism);
-  SetMethod(context, target, "getOnLineStatus", GetOnLineStatus);
+  SetFastMethod(context,
+                target,
+                "getOnLineStatus",
+                SlowGetOnLineStatus,
+                &fast_get_on_line_status_);
   SetMethod(context, target, "getOSInformation", GetOSInformation);
   target
       ->Set(context,
@@ -446,7 +478,9 @@ void RegisterExternalReferences(ExternalReferenceRegistry* registry) {
   registry->Register(GetFreeMemory);
   registry->Register(GetCPUInfo);
   registry->Register(GetInterfaceAddresses);
-  registry->Register(GetOnLineStatus);
+  registry->Register(SlowGetOnLineStatus);
+  registry->Register(FastGetOnLineStatus);
+  registry->Register(fast_get_on_line_status_.GetTypeInfo());
   registry->Register(GetHomeDirectory);
   registry->Register(GetUserInfo);
   registry->Register(SetPriority);
